@@ -1,0 +1,19 @@
+[package]
+name          = "cwgen"
+version       = "0.1.0"
+edition       = "2021"
+authors       = ["Alejandro Revilla - CX4CC <apr@jpos.org>"]
+description   = "Stdin → Morse audio with configurable WPM, tone and gap"
+license       = "MIT"
+
+[dependencies]
+anyhow = "1.0.100"
+clap = { version = "4", features = ["derive"] }
+phf = { version = "0.13.1", features = ["macros"] }
+rodio = "0.17"
+crossterm = "0.27"
+rand = "0.9.2"
+lazy_static = "1.4.0"
+thiserror = "1.0.56"
+hound = "3.5.0"
+
