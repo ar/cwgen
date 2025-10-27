@@ -24,7 +24,7 @@ A Rust-based command-line tool for generating Morse code audio and text with con
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/ar/cwgen.git
 cd cwgen
 
 # Build in release mode
