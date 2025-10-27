@@ -116,9 +116,9 @@ cwgen --practice custom --custom-text "CQ TEST DE"
 
 ## Command Line Reference
 
-text
 
-```
+
+```bash
 USAGE:
     cwgen [OPTIONS]
 
