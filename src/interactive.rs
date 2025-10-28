@@ -33,7 +33,7 @@ pub fn interactive_mode(
                             }
                         }
                         OutputMode::Audio => {
-                            if let Err(e) = play_audio(&buf, timing, tone, qrm, tone_shape) {
+                            if let Err(e) = play_audio(&buf, timing, tone, qrm, tone_shape, None) {
                                 eprintln!("\nAudio error: {}", e);
                             }
                         }
@@ -70,7 +70,7 @@ pub fn practice_mode(
             Err(e) => eprintln!("Error: {}", e),
         }
         
-        if let Err(e) = play_audio(current_word, timing, tone, qrm, tone_shape) {
+        if let Err(e) = play_audio(current_word, timing, tone, qrm, tone_shape, None) {
             eprintln!("Audio error: {}", e);
         }
         

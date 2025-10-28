@@ -136,10 +136,9 @@ OPTIONS:
         --tone-shape <TONE_SHAPE>  Tone shape [default: sine] [possible values: sine, square, sawtooth]
         --farnsworth <FARNSWORTH>  Use Farnsworth timing for learning (specify character speed)
         --output-file <OUTPUT_FILE> Save audio to WAV file instead of playing
+        --drift <DRIFT>            Frequency drift percentage (0-100) - simulates homebrew transmitter
     -V, --version                  Print version information
 ```
-
-
 
 ## QRM Levels
 

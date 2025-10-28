@@ -9,9 +9,12 @@ use crate::morse::{Timing, MorseError};
 // ---------- Tone Generator -------------------------------------------------
 pub struct ToneGenerator {
     sample_rate: u32,
-    frequency: f64,
+    base_frequency: f64,
+    current_frequency: f64,
     phase: f64,
     shape: ToneShape,
+    drift_percentage: Option<u8>,
+    symbol_start_time: f64,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -22,17 +25,41 @@ pub enum ToneShape {
 }
 
 impl ToneGenerator {
-    pub fn new(frequency: u32, sample_rate: u32, shape: ToneShape) -> Self {
+    pub fn new(frequency: u32, sample_rate: u32, shape: ToneShape, drift_percentage: Option<u8>) -> Self {
         Self {
             sample_rate,
-            frequency: frequency as f64,
+            base_frequency: frequency as f64,
+            current_frequency: frequency as f64,
             phase: 0.0,
             shape,
+            drift_percentage,
+            symbol_start_time: 0.0,
         }
     }
     
-    pub fn next_sample(&mut self) -> f32 {
-        let increment = 2.0 * std::f64::consts::PI * self.frequency / self.sample_rate as f64;
+    pub fn start_symbol(&mut self, sample_time: f64) {
+        if self.drift_percentage.is_some() {
+            self.symbol_start_time = sample_time;
+            self.current_frequency = self.base_frequency;
+        }
+    }
+    
+    pub fn next_sample(&mut self, sample_time: f64) -> f32 {
+        if let Some(drift_pct) = self.drift_percentage {
+            // Calculate frequency drift based on time into current symbol
+            let time_in_symbol = sample_time - self.symbol_start_time;
+            
+            // Convert percentage to fraction (e.g., 75 -> 0.75)
+            let target_fraction = drift_pct as f64 / 100.0;
+            
+            // Exponential decay: start at base frequency, drift down to target fraction
+            // Faster decay for more dramatic effect
+            let decay_rate = 1.2; // Higher = faster drift
+            let drift_factor = target_fraction + (1.0 - target_fraction) * (-decay_rate * time_in_symbol).exp();
+            self.current_frequency = self.base_frequency * drift_factor;
+        }
+        
+        let increment = 2.0 * std::f64::consts::PI * self.current_frequency / self.sample_rate as f64;
         self.phase += increment;
         if self.phase > 2.0 * std::f64::consts::PI {
             self.phase -= 2.0 * std::f64::consts::PI;
@@ -115,11 +142,12 @@ impl MorseAudio {
         timing: Timing, 
         tone: u32, 
         qrm: u8,
-        tone_shape: ToneShape
+        tone_shape: ToneShape,
+        drift_percentage: Option<u8>,
     ) -> Self {
         // Use 8000 Hz for smaller files - perfectly adequate for morse code tones
         let sr = 8000;
-        let mut tone_generator = ToneGenerator::new(tone, sr, tone_shape);
+        let mut tone_generator = ToneGenerator::new(tone, sr, tone_shape, drift_percentage);
         let mut samples = Vec::new();
         let mut noise = SsbNoise::new(qrm);
 
@@ -128,6 +156,8 @@ impl MorseAudio {
 
         // Morse signal amplitude (S9 level)
         let signal_amplitude = 0.25;
+        
+        let mut sample_time = 0.0;
 
         // Build tone track - noise should be continuous throughout
         for ch in text.chars() {
@@ -144,6 +174,9 @@ impl MorseAudio {
                     let attack  = (sr as f64 * attack_dur.as_secs_f64()) as usize;
                     let release = (sr as f64 * release_dur.as_secs_f64()) as usize;
                     
+                    // Start new symbol - reset frequency for drift
+                    tone_generator.start_symbol(sample_time);
+                    
                     // Generate tone with envelope PLUS continuous noise
                     for i in 0..len {
                         let mut amp = 1.0;
@@ -154,15 +187,17 @@ impl MorseAudio {
                             amp = (len - i) as f32 / release as f32; 
                         }
                         
-                        let tone_sample = tone_generator.next_sample() * signal_amplitude * amp;
+                        let tone_sample = tone_generator.next_sample(sample_time) * signal_amplitude * amp;
                         let noise_sample = noise.next(sr);
                         samples.push(tone_sample + noise_sample);
+                        sample_time += 1.0 / sr as f64;
                     }
                     
                     // Symbol space - continuous noise only (no tone)
                     let off = (sr as f64 * timing.sym.as_secs_f64()) as usize;
                     for _ in 0..off {
                         samples.push(noise.next(sr)); // Full noise during gaps
+                        sample_time += 1.0 / sr as f64;
                     }
                 }
                 
@@ -170,12 +205,14 @@ impl MorseAudio {
                 let off = (sr as f64 * (timing.chr - timing.sym).as_secs_f64()) as usize;
                 for _ in 0..off {
                     samples.push(noise.next(sr)); // Full noise during gaps
+                    sample_time += 1.0 / sr as f64;
                 }
             } else if up == ' ' {
                 // Word space - continuous noise only (no tone)
                 let off = (sr as f64 * (timing.wrd - timing.chr).as_secs_f64()) as usize;
                 for _ in 0..off {
                     samples.push(noise.next(sr)); // Full noise during gaps
+                    sample_time += 1.0 / sr as f64;
                 }
             }
         }
@@ -226,7 +263,8 @@ pub fn play_audio(
     timing: Timing, 
     tone: u32, 
     qrm: u8,
-    tone_shape: ToneShape
+    tone_shape: ToneShape,
+    drift_percentage: Option<u8>,
 ) -> Result<()> {
     let (_stream, handle) = OutputStream::try_default()
         .map_err(|e| MorseError::AudioDeviceError(e.to_string()))?;
@@ -234,7 +272,7 @@ pub fn play_audio(
     let sink = Sink::try_new(&handle)
         .map_err(|e| MorseError::AudioDeviceError(e.to_string()))?;
     
-    sink.append(MorseAudio::new(text, timing, tone, qrm, tone_shape));
+    sink.append(MorseAudio::new(text, timing, tone, qrm, tone_shape, drift_percentage));
     sink.sleep_until_end();
     
     Ok(())
@@ -247,14 +285,15 @@ pub fn save_audio_to_wav(
     tone: u32,
     qrm: u8,
     tone_shape: ToneShape,
+    drift_percentage: Option<u8>,
     filename: &str,
 ) -> Result<()> {
-    let morse_audio = MorseAudio::new(text, timing, tone, qrm, tone_shape);
+    let morse_audio = MorseAudio::new(text, timing, tone, qrm, tone_shape, drift_percentage);
     let samples = morse_audio.get_samples();
     
     let spec = WavSpec {
         channels: 1,
-        sample_rate: morse_audio.sample_rate(), // This will now be 8000 Hz
+        sample_rate: morse_audio.sample_rate, // Access field directly, not method
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };

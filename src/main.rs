@@ -61,6 +61,10 @@ struct Args {
     /// Save audio to WAV file instead of playing
     #[arg(long)]
     output_file: Option<String>,
+
+    /// Frequency drift percentage (0-100) - simulates homebrew transmitter
+    #[arg(long, value_parser = clap::value_parser!(u8).range(0..=100))]
+    drift: Option<u8>,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -124,12 +128,12 @@ fn main() -> Result<()> {
         OutputMode::Audio => {
             if let Some(output_path) = &args.output_file {
                 // Save to WAV file
-                save_audio_to_wav(&text, timing, args.tone, args.qrm, args.tone_shape, output_path)?;
+                save_audio_to_wav(&text, timing, args.tone, args.qrm, args.tone_shape, args.drift, output_path)?;
                 println!("Saved morse code to: {}", output_path);
                 Ok(())
             } else {
                 // Play audio normally
-                play_audio(&text, timing, args.tone, args.qrm, args.tone_shape)
+                play_audio(&text, timing, args.tone, args.qrm, args.tone_shape, args.drift)
             }
         }
     }
