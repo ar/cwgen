@@ -122,13 +122,17 @@ pub enum PracticeMode {
     Custom,
 }
 
+const HAM_WORDS: &str = include_str!("words.txt");
+
 impl PracticeMode {
     pub fn get_content(&self, custom_text: Option<&str>) -> Vec<String> {
         match self {
-            PracticeMode::RandomWords => vec![
-                "THE", "QUICK", "BROWN", "FOX", "JUMPS", "OVER", "LAZY", "DOG",
-                "PARIS", "CODEX", "MORSE", "HAM", "RADIO", "SIGNAL", "CODE",
-            ].iter().map(|s| s.to_string()).collect(),
+            PracticeMode::RandomWords => HAM_WORDS
+                .lines()
+                .map(str::trim)
+                .filter(|l| !l.is_empty())
+                .map(str::to_string)
+                .collect(),
             PracticeMode::Callsigns => vec![
                 "W1AW", "K2ABC", "N3XYZ", "W4DEF", "K5GHI", "N6JKL", 
                 "W7MNO", "K8PQR", "N9STU", "VE3ABC", "G4HAM",
