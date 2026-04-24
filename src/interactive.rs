@@ -1,6 +1,7 @@
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::terminal;
+use rand::seq::SliceRandom;
 use std::io::Write;
 
 use crate::morse::{Timing, PracticeMode, text_to_morse};
@@ -62,10 +63,11 @@ pub fn practice_mode(
     qrm: u8,
     tone_shape: ToneShape,
 ) -> Result<()> {
-    let content = mode.get_content(custom_text);
-    
+    let mut content = mode.get_content(custom_text);
+    content.shuffle(&mut rand::rng());
+
     println!("Practice mode – {} words available", content.len());
-    println!("Press Space for next, R to repeat, ? to reveal, Esc to quit:\n");
+    println!("Press Space for next, J/← for previous, R to repeat, ? to reveal, Esc to quit:\n");
 
     let mut current_index = 0;
     let mut current_word = &content[current_index];
@@ -84,6 +86,14 @@ pub fn practice_mode(
                     print!("{} ", current_word);
                     let _ = std::io::stdout().flush();
                     current_index = (current_index + 1) % content.len();
+                    current_word = &content[current_index];
+                }
+                KeyCode::Char('j') | KeyCode::Char('J') | KeyCode::Left => {
+                    current_index = if current_index == 0 {
+                        content.len() - 1
+                    } else {
+                        current_index - 1
+                    };
                     current_word = &content[current_index];
                 }
                 KeyCode::Char('r') | KeyCode::Char('R') => {}
