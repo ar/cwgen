@@ -99,10 +99,12 @@ fn main() -> Result<()> {
     // Handle practice mode
     if let Some(mode) = args.practice {
         return practice_mode(
-            timing, 
-            args.tone, 
-            mode, 
-            args.custom_text.as_deref(), 
+            args.wpm,
+            args.gap_ms,
+            args.farnsworth,
+            args.tone,
+            mode,
+            args.custom_text.as_deref(),
             args.qrm,
             args.tone_shape,
         );

@@ -56,9 +56,11 @@ pub fn interactive_mode(
 
 // ---------- Practice mode ----------------------------------------------
 pub fn practice_mode(
-    timing: Timing, 
-    tone: u32, 
-    mode: PracticeMode, 
+    initial_wpm: u32,
+    gap_ms: u64,
+    farnsworth: Option<u32>,
+    tone: u32,
+    mode: PracticeMode,
     custom_text: Option<&str>,
     qrm: u8,
     tone_shape: ToneShape,
@@ -67,10 +69,14 @@ pub fn practice_mode(
     content.shuffle(&mut rand::rng());
 
     println!("Practice mode – {} words available", content.len());
-    println!("Press Space for next, J/← for previous, R to repeat, ? to reveal, Esc to quit:\n");
+    println!("Press Space for next, J/← for previous, R to repeat, ↑/↓ to adjust WPM, ? to reveal, Esc to quit:\n");
 
     let mut current_index = 0;
     let mut current_word = &content[current_index];
+    let mut wpm = initial_wpm;
+    // Farnsworth requires char_speed > overall_speed, so cap overall WPM below the char speed.
+    let max_wpm = farnsworth.map(|f| f.saturating_sub(1)).unwrap_or(100).min(100);
+    let mut timing = build_timing(wpm, gap_ms, farnsworth);
 
     terminal::enable_raw_mode()?;
     let result = (|| {
@@ -97,6 +103,18 @@ pub fn practice_mode(
                     current_word = &content[current_index];
                 }
                 KeyCode::Char('r') | KeyCode::Char('R') => {}
+                KeyCode::Up => {
+                    wpm = (wpm + 5).min(max_wpm);
+                    timing = build_timing(wpm, gap_ms, farnsworth);
+                    print!("({}wpm) ", wpm);
+                    let _ = std::io::stdout().flush();
+                }
+                KeyCode::Down => {
+                    wpm = wpm.saturating_sub(5).max(1);
+                    timing = build_timing(wpm, gap_ms, farnsworth);
+                    print!("({}wpm) ", wpm);
+                    let _ = std::io::stdout().flush();
+                }
                 KeyCode::Char('?') => {
                     print!("[{}]", current_word);
                     let _ = std::io::stdout().flush();
@@ -110,5 +128,12 @@ pub fn practice_mode(
     })();
     terminal::disable_raw_mode()?;
     result
+}
+
+fn build_timing(wpm: u32, gap_ms: u64, farnsworth: Option<u32>) -> Timing {
+    match farnsworth {
+        Some(char_speed) => Timing::new_farnsworth(char_speed, wpm, gap_ms),
+        None => Timing::new(wpm, gap_ms),
+    }
 }
 
