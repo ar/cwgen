@@ -131,6 +131,34 @@ impl SsbNoise {
     }
 }
 
+// ---------- Continuous noise source ----------------------------------------
+// Infinite QRM source for use as a separate sink running across an entire
+// practice session, so the noise floor never drops between words.
+pub struct NoiseSource {
+    noise: SsbNoise,
+    sample_rate: u32,
+}
+
+impl NoiseSource {
+    pub fn new(qrm: u8, sample_rate: u32) -> Self {
+        Self { noise: SsbNoise::new(qrm), sample_rate }
+    }
+}
+
+impl Iterator for NoiseSource {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        Some(self.noise.next(self.sample_rate))
+    }
+}
+
+impl Source for NoiseSource {
+    fn current_frame_len(&self) -> Option<usize> { None }
+    fn channels(&self) -> u16 { 1 }
+    fn sample_rate(&self) -> u32 { self.sample_rate }
+    fn total_duration(&self) -> Option<Duration> { None }
+}
+
 // ---------- Audio generator ------------------------------------------------
 pub struct MorseAudio {
     samples: Vec<f32>,
@@ -141,12 +169,50 @@ pub struct MorseAudio {
 impl MorseAudio {
     pub fn new_with_sample_rate(
         sample_rate: u32,
-        text: &str, 
-        timing: Timing, 
-        tone: u32, 
+        text: &str,
+        timing: Timing,
+        tone: u32,
         qrm: u8,
         tone_shape: ToneShape,
         drift_percentage: Option<u8>,
+    ) -> Self {
+        Self::build(sample_rate, text, timing, tone, qrm, tone_shape, drift_percentage, true)
+    }
+
+    pub fn new(
+        text: &str,
+        timing: Timing,
+        tone: u32,
+        qrm: u8,
+        tone_shape: ToneShape,
+        drift_percentage: Option<u8>,
+    ) -> Self {
+        // Use 44100 Hz for high-quality audio playback
+        Self::new_with_sample_rate(44100, text, timing, tone, qrm, tone_shape, drift_percentage)
+    }
+
+    // Signal-only buffer: morse tone with envelope, silence in gaps. Intended
+    // to be mixed against a separate continuous NoiseSource.
+    pub fn new_signal_only(
+        sample_rate: u32,
+        text: &str,
+        timing: Timing,
+        tone: u32,
+        tone_shape: ToneShape,
+        drift_percentage: Option<u8>,
+    ) -> Self {
+        Self::build(sample_rate, text, timing, tone, 0, tone_shape, drift_percentage, false)
+    }
+
+    fn build(
+        sample_rate: u32,
+        text: &str,
+        timing: Timing,
+        tone: u32,
+        qrm: u8,
+        tone_shape: ToneShape,
+        drift_percentage: Option<u8>,
+        include_noise: bool,
     ) -> Self {
         let mut tone_generator = ToneGenerator::new(tone, sample_rate, tone_shape, drift_percentage);
         let mut samples = Vec::new();
@@ -157,70 +223,74 @@ impl MorseAudio {
 
         // Morse signal amplitude (S9 level)
         let signal_amplitude = 0.25;
-        
+
         let mut sample_time = 0.0;
         let mut is_first_symbol = true;
+
+        let gap_sample = |noise: &mut SsbNoise, sample_rate: u32| -> f32 {
+            if include_noise { noise.next(sample_rate) } else { 0.0 }
+        };
 
         // Build tone track - noise should be continuous throughout
         for ch in text.chars() {
             let up = ch.to_ascii_uppercase();
             if let Some(code) = crate::morse::MORSE.get(&up) {
                 for sym in code.chars() {
-                    let dur = match sym { 
-                        '.' => timing.dot, 
-                        '-' => timing.dash, 
-                        _ => continue 
+                    let dur = match sym {
+                        '.' => timing.dot,
+                        '-' => timing.dash,
+                        _ => continue
                     };
-                    
+
                     let len = (sample_rate as f64 * dur.as_secs_f64()) as usize;
                     let attack  = (sample_rate as f64 * attack_dur.as_secs_f64()) as usize;
                     let release = (sample_rate as f64 * release_dur.as_secs_f64()) as usize;
-                    
+
                     // Start new symbol - reset frequency for drift and phase for continuity
                     tone_generator.start_symbol(sample_time);
-                    
-                    // Generate tone with envelope PLUS continuous noise
+
+                    // Generate tone with envelope (plus optional noise bed)
                     for i in 0..len {
                         let mut amp = 1.0;
-                        if i < attack { 
-                            amp = i as f32 / attack as f32; 
+                        if i < attack {
+                            amp = i as f32 / attack as f32;
                         }
-                        if i >= len - release { 
-                            amp = (len - i) as f32 / release as f32; 
+                        if i >= len - release {
+                            amp = (len - i) as f32 / release as f32;
                         }
-                        
+
                         // Extra gentle start for the very first symbol to prevent any click
                         if is_first_symbol && i == 0 {
                             amp *= 0.1;
                         }
-                        
+
                         let tone_sample = tone_generator.next_sample(sample_time) * signal_amplitude * amp;
-                        let noise_sample = noise.next(sample_rate);
+                        let noise_sample = if include_noise { noise.next(sample_rate) } else { 0.0 };
                         samples.push(tone_sample + noise_sample);
                         sample_time += 1.0 / sample_rate as f64;
                     }
-                    
+
                     is_first_symbol = false;
-                    
-                    // Symbol space - continuous noise only (no tone)
+
+                    // Symbol space
                     let off = (sample_rate as f64 * timing.sym.as_secs_f64()) as usize;
                     for _ in 0..off {
-                        samples.push(noise.next(sample_rate)); // Full noise during gaps
+                        samples.push(gap_sample(&mut noise, sample_rate));
                         sample_time += 1.0 / sample_rate as f64;
                     }
                 }
-                
-                // Character space - continuous noise only (no tone)
+
+                // Character space
                 let off = (sample_rate as f64 * (timing.chr - timing.sym).as_secs_f64()) as usize;
                 for _ in 0..off {
-                    samples.push(noise.next(sample_rate)); // Full noise during gaps
+                    samples.push(gap_sample(&mut noise, sample_rate));
                     sample_time += 1.0 / sample_rate as f64;
                 }
             } else if up == ' ' {
-                // Word space - continuous noise only (no tone)
+                // Word space
                 let off = (sample_rate as f64 * (timing.wrd - timing.chr).as_secs_f64()) as usize;
                 for _ in 0..off {
-                    samples.push(noise.next(sample_rate)); // Full noise during gaps
+                    samples.push(gap_sample(&mut noise, sample_rate));
                     sample_time += 1.0 / sample_rate as f64;
                 }
             }
@@ -231,18 +301,6 @@ impl MorseAudio {
             pos: 0,
             sample_rate,
         }
-    }
-
-    pub fn new(
-        text: &str, 
-        timing: Timing, 
-        tone: u32, 
-        qrm: u8,
-        tone_shape: ToneShape,
-        drift_percentage: Option<u8>,
-    ) -> Self {
-        // Use 44100 Hz for high-quality audio playback
-        Self::new_with_sample_rate(44100, text, timing, tone, qrm, tone_shape, drift_percentage)
     }
 
     pub fn get_samples(&self) -> &[f32] {

@@ -2,11 +2,14 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode};
 use crossterm::terminal;
 use rand::seq::SliceRandom;
+use rodio::{OutputStream, Sink};
 use std::io::Write;
 
-use crate::morse::{Timing, PracticeMode, text_to_morse};
-use crate::audio::{play_audio, ToneShape};
+use crate::morse::{Timing, PracticeMode, text_to_morse, MorseError};
+use crate::audio::{play_audio, MorseAudio, NoiseSource, ToneShape};
 use crate::OutputMode;
+
+const PRACTICE_SAMPLE_RATE: u32 = 44100;
 
 // ---------- Interactive mode ----------------------------------------------
 pub fn interactive_mode(
@@ -78,12 +81,30 @@ pub fn practice_mode(
     let max_wpm = farnsworth.map(|f| f.saturating_sub(1)).unwrap_or(100).min(100);
     let mut timing = build_timing(wpm, gap_ms, farnsworth);
 
+    // Persistent audio: a continuous QRM sink runs across the entire session
+    // so the noise floor never drops between words, repeats, or WPM changes.
+    // The tone sink receives a fresh signal-only buffer for each word and gets
+    // mixed against the noise by rodio.
+    let (_stream, handle) = OutputStream::try_default()
+        .map_err(|e| MorseError::AudioDeviceError(e.to_string()))?;
+    let noise_sink = Sink::try_new(&handle)
+        .map_err(|e| MorseError::AudioDeviceError(e.to_string()))?;
+    noise_sink.append(NoiseSource::new(qrm, PRACTICE_SAMPLE_RATE));
+    let tone_sink = Sink::try_new(&handle)
+        .map_err(|e| MorseError::AudioDeviceError(e.to_string()))?;
+
     terminal::enable_raw_mode()?;
     let result = (|| {
     loop {
-        if let Err(e) = play_audio(current_word, timing, tone, qrm, tone_shape, None) {
-            print!("Audio error: {}\r\n", e);
-        }
+        tone_sink.append(MorseAudio::new_signal_only(
+            PRACTICE_SAMPLE_RATE,
+            current_word,
+            timing,
+            tone,
+            tone_shape,
+            None,
+        ));
+        tone_sink.sleep_until_end();
 
         match event::read()? {
             Event::Key(key) => match key.code {
